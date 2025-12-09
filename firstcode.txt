@@ -1,0 +1,262 @@
+# virtual_mouse_all_in_one.py
+import cv2
+import mediapipe as mp
+import time
+import math
+import numpy as np
+import autopy
+import pyautogui
+import platform
+import subprocess
+import sys
+
+# ---------- Hand Detector (based on your code) ----------
+class handDetector():
+    def __init__(self, mode=False, maxHands=1, modelComplexity=1, detectionCon=0.5, trackCon=0.5):
+        self.mode = mode
+        self.maxHands = maxHands
+        self.modelComplex = modelComplexity
+        self.detectionCon = detectionCon
+        self.trackCon = trackCon
+        self.mpHands = mp.solutions.hands
+        self.hands = self.mpHands.Hands(self.mode, self.maxHands, self.modelComplex, 
+                                        self.detectionCon, self.trackCon)
+        self.mpDraw = mp.solutions.drawing_utils
+        self.tipIds = [4, 8, 12, 16, 20]
+
+    def findHands(self, img, draw=True):
+        imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        self.results = self.hands.process(imgRGB)
+
+        if self.results.multi_hand_landmarks:
+            for handLms in self.results.multi_hand_landmarks:
+                if draw:
+                    self.mpDraw.draw_landmarks(img, handLms,
+                                               self.mpHands.HAND_CONNECTIONS)
+        return img
+
+    def findPosition(self, img, handNo=0, draw=True):
+        xList = []
+        yList = []
+        bbox = []
+        self.lmList = []
+        if self.results.multi_hand_landmarks:
+            myHand = self.results.multi_hand_landmarks[handNo]
+            h, w, c = img.shape
+            for id, lm in enumerate(myHand.landmark):
+                cx, cy = int(lm.x * w), int(lm.y * h)
+                xList.append(cx)
+                yList.append(cy)
+                self.lmList.append([id, cx, cy])
+                if draw:
+                    cv2.circle(img, (cx, cy), 5, (255, 0, 255), cv2.FILLED)
+
+            xmin, xmax = min(xList), max(xList)
+            ymin, ymax = min(yList), max(yList)
+            bbox = xmin, ymin, xmax, ymax
+
+            if draw:
+                cv2.rectangle(img, (xmin - 20, ymin - 20), (xmax + 20, ymax + 20),
+                              (0, 255, 0), 2)
+        return self.lmList, bbox
+
+    def fingersUp(self):
+        fingers = []
+        # Thumb: compare x for right hand; this simple heuristic works in many cases
+        if len(self.lmList) == 0:
+            return [0,0,0,0,0]
+        # Thumb
+        if self.lmList[self.tipIds[0]][1] > self.lmList[self.tipIds[0] - 1][1]:
+            fingers.append(1)
+        else:
+            fingers.append(0)
+
+        # 4 fingers
+        for id in range(1, 5):
+            if self.lmList[self.tipIds[id]][2] < self.lmList[self.tipIds[id] - 2][2]:
+                fingers.append(1)
+            else:
+                fingers.append(0)
+        return fingers
+
+    def findDistance(self, p1, p2, img=None, draw=True, r=8, t=2):
+        x1, y1 = self.lmList[p1][1:]
+        x2, y2 = self.lmList[p2][1:]
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        if draw and img is not None:
+            cv2.line(img, (x1, y1), (x2, y2), (255, 0, 255), t)
+            cv2.circle(img, (x1, y1), r, (255, 0, 255), cv2.FILLED)
+            cv2.circle(img, (x2, y2), r, (255, 0, 255), cv2.FILLED)
+            cv2.circle(img, (cx, cy), r, (0, 0, 255), cv2.FILLED)
+        length = math.hypot(x2 - x1, y2 - y1)
+        return length, img, [x1, y1, x2, y2, cx, cy]
+
+# ---------- Platform Volume Utilities ----------
+system = platform.system()
+
+def set_volume_percent(percent: int):
+    """Set system volume to percent (0-100) cross-platform."""
+    percent = max(0, min(100, int(percent)))
+    try:
+        if system == "Windows":
+            # Use pycaw if available
+            try:
+                from comtypes import CLSCTX_ALL
+                from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+                devices = AudioUtilities.GetSpeakers()
+                interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+                volume = interface.QueryInterface(IAudioEndpointVolume)
+                # pycaw works in scalar 0.0 - 1.0
+                volume.SetMasterVolumeLevelScalar(percent / 100.0, None)
+            except Exception as e:
+                print("pycaw not available or failed:", e)
+        elif system == "Darwin":
+            # macOS using AppleScript
+            # set volume expects 0-100
+            script = f"set volume output volume {percent}"
+            subprocess.call(["osascript", "-e", script])
+        else:
+            # Assume Linux -> amixer
+            # This will work with ALSA (amixer from alsa-utils)
+            subprocess.call(["amixer", "sset", "'Master'", f"{percent}%"])
+    except Exception as e:
+        print("Failed to set volume:", e)
+
+# ---------- Main: combined functionality ----------
+def main():
+    # camera params
+    wCam, hCam = 1280, 720
+    frameR = 100  # frame reduction for movement area
+    smoothening = 7
+
+    pTime = 0
+    plocX, plocY = 0, 0
+    clocX, clocY = 0, 0
+
+    # scroll/zoom tracking
+    prev_scroll_y = None
+    scroll_sensitivity = 40  # change to taste
+    prev_pinch_dist = None
+    prev_vol_dist = None
+
+    cap = cv2.VideoCapture(0)
+    cap.set(3, wCam)
+    cap.set(4, hCam)
+    detector = handDetector(maxHands=1)
+    wScr, hScr = autopy.screen.size()
+
+    print("Screen size:", wScr, hScr)
+    print("Press 'q' to quit.")
+
+    while True:
+        success, img = cap.read()
+        if not success:
+            continue
+
+        img = detector.findHands(img)
+        lmList, bbox = detector.findPosition(img)
+        fingers = [0,0,0,0,0]
+
+        if len(lmList) != 0:
+            fingers = detector.fingersUp()
+
+            # coordinates for tips we'll use
+            xIndex, yIndex = lmList[8][1], lmList[8][2]
+            xMiddle, yMiddle = lmList[12][1], lmList[12][2]
+            xThumb, yThumb = lmList[4][1], lmList[4][2]
+
+            # draw frame rectangle
+            cv2.rectangle(img, (frameR, frameR), (wCam - frameR, hCam - frameR),
+                          (255, 0, 255), 2)
+
+            # ----- MOVE MOUSE (index finger only) -----
+            if fingers[1] == 1 and fingers[2] == 0:
+                # map coordinates
+                x3 = np.interp(xIndex, (frameR, wCam - frameR), (0, wScr))
+                y3 = np.interp(yIndex, (frameR, hCam - frameR), (0, hScr))
+                # smoothing
+                clocX = plocX + (x3 - plocX) / smoothening
+                clocY = plocY + (y3 - plocY) / smoothening
+                autopy.mouse.move(wScr - clocX, clocY)
+                cv2.circle(img, (xIndex, yIndex), 15, (255, 0, 255), cv2.FILLED)
+                plocX, plocY = clocX, clocY
+
+                # reset scroll tracking when moving with index only
+                prev_scroll_y = None
+                prev_pinch_dist = None
+                prev_vol_dist = None
+
+            # ----- CLICK (pinch) OR CLICK BY PROXIMITY: index + middle -----
+            if fingers[1] == 1 and fingers[2] == 1:
+                # distance between index tip (8) and middle tip (12) for clicking
+                length, img, lineInfo = detector.findDistance(8, 12, img, draw=True)
+                # if they are very close -> left click
+                if length < 40:
+                    cv2.circle(img, (lineInfo[4], lineInfo[5]), 12, (0, 255, 0), cv2.FILLED)
+                    autopy.mouse.click()
+                    # small delay to prevent too many clicks
+                    time.sleep(0.15)
+
+                # ----- SCROLL MODE (index + middle up and not pinching) -----
+                # Use the vertical movement of the midpoint between index & middle to scroll
+                mid_y = (lineInfo[1] + lineInfo[3]) // 2 if lineInfo is not None else (yIndex + yMiddle)//2
+                if prev_scroll_y is None:
+                    prev_scroll_y = mid_y
+                else:
+                    dy = prev_scroll_y - mid_y  # positive -> hand moved up -> scroll up
+                    if abs(dy) > 5:
+                        # scale dy to reasonable scroll steps
+                        scroll_amount = int(dy / 2)
+                        # pyautogui.scroll: positive -> up, negative -> down
+                        pyautogui.scroll(scroll_amount)
+                        prev_scroll_y = mid_y
+
+                # reset pinch/volume trackers
+                prev_pinch_dist = None
+
+            # ----- PINCH: Zoom and Volume (thumb + index) -----
+            # We'll use distance between thumb tip (4) and index tip (8)
+            pinch_dist, img, pinchInfo = detector.findDistance(4, 8, img, draw=True)
+            # Zoom gesture: when pinch is active (thumb touching index) then separating/closing -> ctrl+scroll
+            # We'll treat pinch "active" when index and thumb are both up or thumb is up and index up.
+            if fingers[0] == 1 or fingers[1] == 1:
+                # use previous pinch distance to determine zoom or volume mapping
+                if prev_pinch_dist is None:
+                    prev_pinch_dist = pinch_dist
+                else:
+                    # zoom: significant change while pinch-ish (small baseline)
+                    diff = pinch_dist - prev_pinch_dist
+                    if abs(diff) > 8:
+                        # emulate Ctrl + scroll for zoom
+                        # positive diff -> fingers moving apart => zoom in
+                        pyautogui.keyDown('ctrl')
+                        pyautogui.scroll(int(diff))   # multiply or change scale if needed
+                        pyautogui.keyUp('ctrl')
+                        prev_pinch_dist = pinch_dist
+
+                # volume control: map pinch distance to volume continuously
+                # choose mapping window (experimentally): dist 20..200 -> vol 0..100
+                vol = np.interp(pinch_dist, [20, 200], [0, 100])
+                set_volume_percent(int(vol))
+                prev_vol_dist = pinch_dist
+
+            else:
+                prev_pinch_dist = None
+                prev_vol_dist = None
+
+        # ----- FPS display -----
+        cTime = time.time()
+        fps = 1 / (cTime - pTime) if (cTime - pTime) != 0 else 0
+        pTime = cTime
+        cv2.putText(img, f'FPS: {int(fps)}', (20, 50), cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 0), 2)
+
+        cv2.imshow("Virtual Mouse (All-in-one)", img)
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
