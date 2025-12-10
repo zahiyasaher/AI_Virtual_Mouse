@@ -59,18 +59,37 @@ class handDetector():
         return self.lmList, bbox
 
     def fingersUp(self):
-        fingers = [0,0,0,0,0]
+        """
+        Returns list [thumb, index, middle, ring, pinky] where each entry is:
+        1 if the finger is extended (based on magnitude between tip and pip),
+        0 otherwise.
+
+        Note: extension is detected by magnitude (abs difference) so it works
+        for both upright and upside-down fingers.
+        """
+        fingers = [0, 0, 0, 0, 0]
         if len(self.lmList) == 0:
             return fingers
 
-        # Thumb
-        if self.lmList[self.tipIds[0]][1] > self.lmList[self.tipIds[0]-1][1]:
-            fingers[0] = 1
+        # threshold (pixels) to consider a finger 'extended'
+        EXTENDED_THRESH = 20
 
-        # Other fingers
-        for i in range(1,5):
-            if self.lmList[self.tipIds[i]][2] < self.lmList[self.tipIds[i]-2][2]:
+        # Thumb: keep previous heuristic (horizontal) for thumb extension
+        try:
+            if self.lmList[self.tipIds[0]][1] > self.lmList[self.tipIds[0]-1][1]:
+                fingers[0] = 1
+        except Exception:
+            fingers[0] = 0
+
+        # Other 4 fingers: compare tip (id) vs pip (id-2) magnitude
+        for i in range(1, 5):
+            tip_y = self.lmList[self.tipIds[i]][2]
+            pip_y = self.lmList[self.tipIds[i] - 2][2]
+            # if vertical separation is large enough -> considered extended
+            if abs(tip_y - pip_y) > EXTENDED_THRESH:
                 fingers[i] = 1
+            else:
+                fingers[i] = 0
 
         return fingers
 
@@ -109,7 +128,7 @@ def main():
     print("Controls:")
     print("- Index finger only: Move cursor")
     print("- Index + Middle close: Click")
-    print("- Thumb + Index close: Right click")
+    print("- Thumb + Index close: Right click (thumb only)")
     print("- Index + Middle UP: Scroll UP")
     print("- Index + Middle DOWN: Scroll DOWN")
     print("- Scroll speed = horizontal finger gap")
@@ -130,39 +149,41 @@ def main():
             xMiddle, yMiddle = lmList[12][1:]
             xThumb,  yThumb  = lmList[4][1:]
 
-            # Lower joints for direction (up/down)
-            yIndex_lower = lmList[6][2]
-            yMiddle_lower = lmList[10][2]
+            # Lower joints for direction (PIP = idx 6 and 10)
+            yIndex_pip = lmList[6][2]
+            yMiddle_pip = lmList[10][2]
 
             cv2.rectangle(img, (frameR, frameR),
                           (wCam - frameR, hCam - frameR),
                           (255,0,255), 2)
 
-            # ------------------- NEW SCROLL LOGIC -------------------
+            # ------------------- SCROLL MODE (Orientation-based + Horizontal Speed) -------------------
+            # Use 'extended' status (magnitude) to ensure detection even when inverted
             if fingers[1] == 1 and fingers[2] == 1:
-
                 horiz_dist = abs(xMiddle - xIndex)
-                speed = max(1, int(horiz_dist / 8))
+                # sensitivity: smaller divisor -> faster scroll growth
+                speed = max(1, int(horiz_dist / 6))
+                speed = min(speed, 80)  # hard cap to avoid huge jumps
 
-                # SCROLL UP (both fingers upright)
-                if yIndex < yIndex_lower and yMiddle < yMiddle_lower:
+                # UP: tip is above pip (smaller Y in image coords)
+                if yIndex < yIndex_pip and yMiddle < yMiddle_pip and horiz_dist > 10:
                     pyautogui.scroll(speed)
                     cv2.putText(img, f'SCROLL UP', (wCam//2 - 120, 100),
                                 cv2.FONT_HERSHEY_PLAIN, 2, (0, 255, 0), 3)
                     cv2.putText(img, f'Speed: {speed}', (wCam//2 - 80, 140),
                                 cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 255, 0), 2)
                     cv2.line(img, (xIndex, yIndex), (xMiddle, yMiddle), (0,255,0), 3)
-                    time.sleep(0.08)
+                    time.sleep(0.06)
 
-                # SCROLL DOWN (both fingers downward)
-                elif yIndex > yIndex_lower and yMiddle > yMiddle_lower:
+                # DOWN: tip is below pip (larger Y in image coords)
+                elif yIndex > yIndex_pip and yMiddle > yMiddle_pip and horiz_dist > 10:
                     pyautogui.scroll(-speed)
                     cv2.putText(img, f'SCROLL DOWN', (wCam//2 - 130, 100),
                                 cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 3)
                     cv2.putText(img, f'Speed: {speed}', (wCam//2 - 80, 140),
                                 cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 0, 255), 2)
                     cv2.line(img, (xIndex, yIndex), (xMiddle, yMiddle), (0,0,255), 3)
-                    time.sleep(0.08)
+                    time.sleep(0.06)
 
             # ------------------- MOUSE MOVEMENT -------------------
             elif fingers[1] == 1 and fingers[2] == 0:
@@ -188,6 +209,7 @@ def main():
                 time.sleep(0.20)
 
             # ------------------- RIGHT CLICK (Thumb + Index) -------------------
+            # Thumb only used here
             length_rc, _, _ = detector.findDistance(4, 8, img, draw=False)
             if length_rc < 30 and not (fingers[1] == 1 and fingers[2] == 1):
                 autopy.mouse.click(autopy.mouse.Button.RIGHT)
