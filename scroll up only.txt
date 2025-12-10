@@ -108,10 +108,10 @@ def main():
     print("Virtual Mouse Started -- Press 'q' to quit")
     print("Controls:")
     print("- Index finger only: Move cursor")
-    print("- Index + Middle close together: Click")
+    print("- Index + Middle close: Click")
     print("- Thumb + Index close: Right click")
-    print("- Index + Middle UP (fingers spread): Scroll UP")
-    print("- Index + Middle DOWN (fingers spread): Scroll DOWN")
+    print("- Index + Middle UP: Scroll UP")
+    print("- Index + Middle DOWN: Scroll DOWN")
     print("- Scroll speed = horizontal finger gap")
 
     while True:
@@ -130,68 +130,41 @@ def main():
             xMiddle, yMiddle = lmList[12][1:]
             xThumb,  yThumb  = lmList[4][1:]
 
-            # Get base knuckle positions for better direction detection
-            yIndex_base = lmList[5][2]  # Index finger base (knuckle)
-            yMiddle_base = lmList[9][2]  # Middle finger base (knuckle)
+            # Lower joints for direction (up/down)
+            yIndex_lower = lmList[6][2]
+            yMiddle_lower = lmList[10][2]
 
             cv2.rectangle(img, (frameR, frameR),
                           (wCam - frameR, hCam - frameR),
                           (255,0,255), 2)
 
-            # Calculate distance between index and middle fingers
-            length_fingers = math.hypot(xMiddle - xIndex, yMiddle - yIndex)
-            
-            # ------------------- SCROLL LOGIC (fingers spread apart) -------------------
-            if fingers[1] == 1 and fingers[2] == 1 and length_fingers > 50:
+            # ------------------- NEW SCROLL LOGIC -------------------
+            if fingers[1] == 1 and fingers[2] == 1:
+
                 horiz_dist = abs(xMiddle - xIndex)
                 speed = max(1, int(horiz_dist / 8))
 
-                # Calculate average vertical movement
-                avg_tip_y = (yIndex + yMiddle) / 2
-                avg_base_y = (yIndex_base + yMiddle_base) / 2
-                
-                # DEBUG: Show values
-                cv2.putText(img, f'Diff: {int(avg_tip_y - avg_base_y)}', (20, 100),
-                            cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 255), 2)
-                cv2.putText(img, f'Dist: {int(length_fingers)}', (20, 130),
-                            cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 255), 2)
-                
-                # SCROLL UP (fingertips above base - pointing up)
-                if avg_tip_y < avg_base_y - 30:  # 30 pixel threshold
+                # SCROLL UP (both fingers upright)
+                if yIndex < yIndex_lower and yMiddle < yMiddle_lower:
                     pyautogui.scroll(speed)
-                    cv2.putText(img, f'SCROLL UP', (wCam//2 - 120, 200),
-                                cv2.FONT_HERSHEY_PLAIN, 3, (0, 255, 0), 4)
-                    cv2.putText(img, f'Speed: {speed}', (wCam//2 - 80, 250),
+                    cv2.putText(img, f'SCROLL UP', (wCam//2 - 120, 100),
                                 cv2.FONT_HERSHEY_PLAIN, 2, (0, 255, 0), 3)
+                    cv2.putText(img, f'Speed: {speed}', (wCam//2 - 80, 140),
+                                cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 255, 0), 2)
                     cv2.line(img, (xIndex, yIndex), (xMiddle, yMiddle), (0,255,0), 3)
                     time.sleep(0.08)
 
-                # SCROLL DOWN (fingertips below base - pointing down)
-                elif avg_tip_y > avg_base_y + 30:  # 30 pixel threshold
+                # SCROLL DOWN (both fingers downward)
+                elif yIndex > yIndex_lower and yMiddle > yMiddle_lower:
                     pyautogui.scroll(-speed)
-                    cv2.putText(img, f'SCROLL DOWN', (wCam//2 - 130, 200),
-                                cv2.FONT_HERSHEY_PLAIN, 3, (0, 0, 255), 4)
-                    cv2.putText(img, f'Speed: {speed}', (wCam//2 - 80, 250),
+                    cv2.putText(img, f'SCROLL DOWN', (wCam//2 - 130, 100),
                                 cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 3)
+                    cv2.putText(img, f'Speed: {speed}', (wCam//2 - 80, 140),
+                                cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 0, 255), 2)
                     cv2.line(img, (xIndex, yIndex), (xMiddle, yMiddle), (0,0,255), 3)
                     time.sleep(0.08)
-                else:
-                    # Show neutral state
-                    cv2.putText(img, f'SCROLL MODE (tilt fingers)', (wCam//2 - 200, 200),
-                                cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 0), 3)
 
-            # ------------------- CLICK (fingers close together) -------------------
-            elif fingers[1] == 1 and fingers[2] == 1 and length_fingers < 40:
-                if drag_active:
-                    autopy.mouse.toggle(autopy.mouse.Button.LEFT, False)
-                    drag_active = False
-                
-                autopy.mouse.click()
-                cv2.putText(img, 'CLICK', (wCam//2 - 50, 100),
-                           cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 0), 3)
-                time.sleep(0.20)
-
-            # ------------------- MOUSE MOVEMENT (only index finger) -------------------
+            # ------------------- MOUSE MOVEMENT -------------------
             elif fingers[1] == 1 and fingers[2] == 0:
                 if drag_active:
                     autopy.mouse.toggle(autopy.mouse.Button.LEFT, False)
@@ -206,9 +179,17 @@ def main():
                 autopy.mouse.move(wScr - clocX, clocY)
                 plocX, plocY = clocX, clocY
 
-            # ------------------- RIGHT CLICK (Thumb + Index close) -------------------
+            # ------------------- CLICK -------------------
+            length_fingers = math.hypot(xMiddle - xIndex, yMiddle - yIndex)
+            if fingers[1] == 1 and fingers[2] == 1 and length_fingers < 40:
+                autopy.mouse.click()
+                cv2.putText(img, 'CLICK', (wCam//2 - 50, 100),
+                           cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 0), 3)
+                time.sleep(0.20)
+
+            # ------------------- RIGHT CLICK (Thumb + Index) -------------------
             length_rc, _, _ = detector.findDistance(4, 8, img, draw=False)
-            if length_rc < 30 and fingers[2] == 0:
+            if length_rc < 30 and not (fingers[1] == 1 and fingers[2] == 1):
                 autopy.mouse.click(autopy.mouse.Button.RIGHT)
                 cv2.putText(img, 'RIGHT CLICK', (wCam//2 - 100, 100),
                            cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 255), 3)

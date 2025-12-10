@@ -1,0 +1,38 @@
+            # ------------------- SCROLL LOGIC (fingers spread apart) -------------------
+            if fingers[1] == 1 and fingers[2] == 1 and length_fingers > 50:
+                horiz_dist = abs(xMiddle - xIndex)
+                speed = max(1, int(horiz_dist / 8))
+
+                # Calculate average vertical movement
+                avg_tip_y = (yIndex + yMiddle) / 2
+                avg_base_y = (yIndex_base + yMiddle_base) / 2
+                
+                # DEBUG: Show values
+                cv2.putText(img, f'Diff: {int(avg_tip_y - avg_base_y)}', (20, 100),
+                            cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 255), 2)
+                cv2.putText(img, f'Dist: {int(length_fingers)}', (20, 130),
+                            cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 255), 2)
+                
+                # SCROLL UP (fingertips above base - pointing up)
+                if avg_tip_y < avg_base_y - 30:  # 30 pixel threshold
+                    pyautogui.scroll(speed)
+                    cv2.putText(img, f'SCROLL UP', (wCam//2 - 120, 200),
+                                cv2.FONT_HERSHEY_PLAIN, 3, (0, 255, 0), 4)
+                    cv2.putText(img, f'Speed: {speed}', (wCam//2 - 80, 250),
+                                cv2.FONT_HERSHEY_PLAIN, 2, (0, 255, 0), 3)
+                    cv2.line(img, (xIndex, yIndex), (xMiddle, yMiddle), (0,255,0), 3)
+                    time.sleep(0.08)
+
+                # SCROLL DOWN (fingertips below base - pointing down)
+                elif avg_tip_y > avg_base_y + 30:  # 30 pixel threshold
+                    pyautogui.scroll(-speed)
+                    cv2.putText(img, f'SCROLL DOWN', (wCam//2 - 130, 200),
+                                cv2.FONT_HERSHEY_PLAIN, 3, (0, 0, 255), 4)
+                    cv2.putText(img, f'Speed: {speed}', (wCam//2 - 80, 250),
+                                cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 3)
+                    cv2.line(img, (xIndex, yIndex), (xMiddle, yMiddle), (0,0,255), 3)
+                    time.sleep(0.08)
+                else:
+                    # Show neutral state
+                    cv2.putText(img, f'SCROLL MODE (tilt fingers)', (wCam//2 - 200, 200),
+                                cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 0), 3)
